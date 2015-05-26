@@ -12,13 +12,11 @@ import play.api.libs.concurrent.Execution.Implicits._
 import org.joda.time.DateTime
 
 import scala.util.{Success, Failure}
-import scala.concurrent.Future
+import scala.concurrent.duration._
+import scala.concurrent.{Future, Await}
 
-import play.modules.reactivemongo.{ MongoController, ReactiveMongoPlugin }
-//import play.modules.reactivemongo.json.collection.JSONCollection
+import play.modules.reactivemongo.{MongoController, ReactiveMongoPlugin}
 
-//import reactivemongo.api.gridfs.GridFS
-//import reactivemongo.api.gridfs.Implicits.DefaultReadFileReader
 import reactivemongo.api.collections.default.BSONCollection
 import reactivemongo.bson._
 import reactivemongo.api._
@@ -32,9 +30,9 @@ object Application extends Controller with MongoController {
   val commentsColl = defaultDB.collection("comments")
   val topicsColl = defaultDB.collection("topics")
 
-  val driver0 = ReactiveMongoPlugin.driver
+  val driver0 = new MongoDriver()
   // Create one connection per replicaset: 0 to N
-  val conn0 = driver0.connection(List("localhost"))
+  val conn0 = driver0.connection(List("localhost:3001"))
   val local0 = conn0.db("local")
   val oplog0 = local0.collection("oplog.rs")
   // more connections to replicasets here...
@@ -70,6 +68,7 @@ object Application extends Controller with MongoController {
     }
   }
 
+  enumerator0.apply(iteratee0)
 
   var topicId = BSONObjectID("5549020460295bb4f109e086")
   def insertComment(json: JsValue): Unit = {
@@ -80,6 +79,7 @@ object Application extends Controller with MongoController {
     //terms.foreach(topic =>
       //if(text contains topic){
         commentsColl.insert(BSONDocument(
+          "_id" -> BSONObjectID.generate.stringify,
           "topic" -> topicId,
           "text" -> text,
           "author" -> userName,
@@ -97,7 +97,7 @@ object Application extends Controller with MongoController {
       val operation = bs.getAs[String]("op").get
       operation match {
         case "i" => if(o.getAs[String]("source").get == "app" &&
-                       bs.getAs[String]("ns").get == "expression.comments")
+                       bs.getAs[String]("ns").get == "meteor.comments")
                        updateComment(o)
         case _   =>
       }
@@ -106,7 +106,7 @@ object Application extends Controller with MongoController {
 
   def updateComment(obj: BSONDocument): Unit = {
     val text = obj.getAs[String]("text").get
-    val objId = obj.getAs[BSONObjectID]("_id").get
+    val objId = obj.getAs[String]("_id").get
     val selector = BSONDocument("_id" -> objId)
     val modifier = BSONDocument(
         "$set" -> BSONDocument(
@@ -116,7 +116,6 @@ object Application extends Controller with MongoController {
     commentsColl.update(selector, modifier)
   }
 
-  enumerator0.apply(iteratee0)
 
   def upsertTopic(topic: String): Unit = {
     val doc = topicsColl.find(BSONDocument("name" -> topic))
@@ -136,7 +135,7 @@ object Application extends Controller with MongoController {
   }
 
   def findTopicId(topic: String): Unit = {
-      topicsColl.find(BSONDocument("name" -> topic))
+        topicsColl.find(BSONDocument("name" -> topic))
         .one
         .onSuccess{
           case Some(d) => {
@@ -153,12 +152,13 @@ object Application extends Controller with MongoController {
     WS.url("https://stream.twitter.com/1.1/statuses/filter.json?track=" + term)
     .sign(OAuthCalculator(Twitter.KEY, Twitter.TOKEN))
     .get((_: (WSResponseHeaders)) => tweetIteratee)
-  ).run
+    ).run
     Ok("got it")
   }
 
   def index = Action {
     println("INDEX OK")
+
     Ok("Your new application is ready.")
   }
 
