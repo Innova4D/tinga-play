@@ -48,47 +48,68 @@ object Application extends Controller with MongoController {
     data => updateComments(data)
   }
 
-  val tweetIteratee = Iteratee.foreach[Array[Byte]]{
-    data => insertComments(data)
+  val tweetIteratee = Iteratee.foreach[String]{
+    data => insertTweets(data)
   }
 
-  def insertComments(chunk: Array[Byte]): Unit = {
+  def insertTweets(str: String): Unit = {
     Future{
-      val str = new String(chunk, "UTF-8")
+      //val str = new String(chunk, "UTF-8")
       if(str.contains("""Easy there, Turbo.
                       Too many requests recently.
                       Enhance your calm."""))
         {
-        println(str)
-        track(" ")
+         println(str)
+         track(" ")
         }
       val json = Json.parse(str)
-      insertComment(json)
+      insertTweet(json)
       println((json \ "text").as[String])
     }
   }
 
   enumerator0.apply(iteratee0)
 
-  var topicId = BSONObjectID("5549020460295bb4f109e086")
-  def insertComment(json: JsValue): Unit = {
+  case class TweetTopic(  var id: BSONObjectID,
+                          var avg: Double,
+                          var pp: Int,
+                          var p: Int,
+                          var neu: Int,
+                          var n: Int,
+                          var nn: Int)
 
+  var topicsId = Map[String,BSONObjectID]()
+  var tweetsMap = Map[String, TweetTopic]()
+  var topicsMap = Map[String,TweetTopic]()
+  def setTopicId(topic: String, id: BSONObjectID, avg: Double,
+                 pp: Int, p: Int, neu: Int, n: Int, nn: Int): Unit = {
+    topicsId += topic -> id
+    val tweetTopic = TweetTopic(id, avg, pp, p, neu, n, nn)
+    tweetsMap += topic -> tweetTopic
+  }
+
+  def insertTweet(json: JsValue): Unit = {
     val text = (json \ "text").as[String]
     val userName = (json \ "user" \ "screen_name").as[String]
-    println(userName)
-    //terms.foreach(topic =>
-      //if(text contains topic){
-        commentsColl.insert(BSONDocument(
-          "_id" -> BSONObjectID.generate.stringify,
-          "topic" -> topicId,
-          "text" -> text,
-          "author" -> userName,
-          "posted" -> BSONDateTime(new DateTime().getMillis),
-          "sentiment" -> Sentiment.score(text),
-          "keywords" -> Sentiment.words(text),
-          "source" -> "twitter"
-        ))
-      //})
+    val sentiment = Sentiment.score(text)
+    Future{
+      if(sentiment._2 == true){
+        for(topicId <- topicsId){
+          if(text contains topicId._1){
+            commentsColl.insert(BSONDocument(
+              "_id" -> BSONObjectID.generate.stringify,
+              "topic" -> topicId._2,
+              "text" -> text,
+              "author" -> userName,
+              "posted" -> BSONDateTime(new DateTime().getMillis),
+              "sentiment" -> sentiment._1,
+              "keywords" -> Sentiment.words(text),
+              "source" -> "twitter"))
+            //reactiveTopic(topicId._2, sentiment._1)
+          } //end inner if
+        } // end for
+      } // end outer if
+    } // end Future
   }
 
   def updateComments(bs: BSONDocument): Unit = {
@@ -105,60 +126,80 @@ object Application extends Controller with MongoController {
   }
 
   def updateComment(obj: BSONDocument): Unit = {
-    val text = obj.getAs[String]("text").get
-    val objId = obj.getAs[String]("_id").get
-    val selector = BSONDocument("_id" -> objId)
-    val modifier = BSONDocument(
-        "$set" -> BSONDocument(
-          "sentiment" -> Sentiment.score(text),
-          "keywords" -> Sentiment.words(text)
-        ))
-    commentsColl.update(selector, modifier)
+    Future{
+      val topic = obj.getAs[BSONObjectID]("topic")
+      val text = obj.getAs[String]("text").get
+      val objId = obj.getAs[String]("_id").get
+      val sentiment = Sentiment.score(text)
+      val selector = BSONDocument("_id" -> objId)
+      val modifier = BSONDocument(
+          "$set" -> BSONDocument(
+            "sentiment" -> sentiment._1,
+            "keywords" -> Sentiment.words(text)))
+      commentsColl.update(selector, modifier)
+      //reactiveTopic(topic, sentiment._1)
+    }
   }
 
+  /*def reactiveTopic(topic: BSONObjectID, sentiment: Double): Unit = {
+    Future{
+      val selector = BSONDocument("_id" -> topic)
+      val modifier = BSONDocument
+    }
+  }*/
 
   def upsertTopic(topic: String): Unit = {
-    val doc = topicsColl.find(BSONDocument("name" -> topic))
-              .one
-              .onSuccess{
-                case d => d match{
-                  case None => topicsColl.insert(BSONDocument(
-                                "name" -> topic,
-                                "isActive" -> 1,
-                                "creator" -> "ReactiveTwitter",
-                                "timestamp" -> BSONDateTime(new DateTime()
-                                                            .getMillis)
-                                ))
-                  case _ =>
-                }
+    Await
+    .ready(topicsColl.find(BSONDocument("name" -> topic)).one, Duration.Inf)
+    .onSuccess{
+      case d => d match{
+              case None => {
+                            val id = BSONObjectID.generate
+                            topicsColl.insert(BSONDocument(
+                            "_id" -> id,
+                            "name" -> topic,
+                            "isActive" -> 1,
+                            "creator" -> "ReactiveTwitter",
+                            "timestamp" -> BSONDateTime(new DateTime()
+                                                        .getMillis)
+                            ))
+                            setTopicId(topic, id,0.0 , 0, 0, 0, 0, 0)
+                           }
+              case Some(bs) =>{
+                               val id = bs.getAs[BSONObjectID]("_id").get
+                               val avg = bs.getAs[Double]("avgSen").get
+                               val pp = bs.getAs[Double]("excellent").get.toInt
+                               val p = bs.getAs[Double]("good").get.toInt
+                               val neu = bs.getAs[Double]("neutral").get.toInt
+                               val n = bs.getAs[Double]("bad").get.toInt
+                               val nn = bs.getAs[Double]("terrible").get.toInt
+                               setTopicId(topic, id, avg, pp, p, neu, n, nn)
+                              }
+                           }
               }
   }
 
-  def findTopicId(topic: String): Unit = {
-        topicsColl.find(BSONDocument("name" -> topic))
-        .one
-        .onSuccess{
-          case Some(d) => {
-            topicId = d.getAs[BSONObjectID]("_id").get
-            println(topicId)
-            }
-        }
-  }
 
   def track(term: String) = Action { request =>
-    upsertTopic(term)
-    findTopicId(term)
-    Iteratee.flatten(
-    WS.url("https://stream.twitter.com/1.1/statuses/filter.json?track=" + term)
-    .sign(OAuthCalculator(Twitter.KEY, Twitter.TOKEN))
-    .get((_: (WSResponseHeaders)) => tweetIteratee)
-    ).run
+    term.split(",").toList.foreach(upsertTopic _)
+    trackTerms(term)
     Ok("got it")
   }
 
+  def trackTerms(term: String): Unit = {
+    val tweetEnumeratee = Enumeratee
+                          .map[Array[Byte]](bytes => new String(bytes, "UTF-8"))
+    println()
+    println(tweetsMap)
+    Iteratee.flatten(
+    WS.url("https://stream.twitter.com/1.1/statuses/filter.json?track=" + term)
+    .sign(OAuthCalculator(Twitter.KEY, Twitter.TOKEN))
+    .get((_: (WSResponseHeaders)) => tweetEnumeratee &> tweetIteratee))
+    .run
+}
+
   def index = Action {
     println("INDEX OK")
-
     Ok("Your new application is ready.")
   }
 
