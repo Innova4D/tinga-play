@@ -72,12 +72,12 @@ object Application extends Controller with MongoController {
       val topic = obj.getAs[BSONObjectID]("topic")
       val text = obj.getAs[String]("text").get
       val objId = obj.getAs[String]("_id").get
-      val sentiment = Sentiment.score(text)
+      val sentiment = Sentiment.score(Sentiment.clean(text))
       val selector = BSONDocument("_id" -> objId)
       val modifier = BSONDocument(
           "$set" -> BSONDocument(
             "sentiment" -> sentiment._1,
-            "keywords" -> Sentiment.words(text)))
+            "keywords" -> Sentiment.words(Sentiment.clean(text))))
       commentsColl.update(selector, modifier)
       //reactiveUpdateTopic(topic, sentiment._1)
     }
@@ -120,7 +120,7 @@ object Application extends Controller with MongoController {
   def insertTweet(json: JsValue): Unit = {
     val text = (json \ "text").as[String]
     val userName = (json \ "user" \ "screen_name").as[String]
-    val sentiment = Sentiment.score(text)
+    val sentiment = Sentiment.score(Sentiment.clean(text))
     Future{
       if(sentiment._2 == true){
         for(tweetTopic <- tweetsMap){
@@ -132,7 +132,7 @@ object Application extends Controller with MongoController {
               "author" -> userName,
               "posted" -> BSONDateTime(new DateTime().getMillis),
               "sentiment" -> sentiment._1,
-              "keywords" -> Sentiment.words(text),
+              "keywords" -> Sentiment.words(Sentiment.clean(text)),
               "source" -> "twitter"))
             reactiveTweetTopic(tweetTopic._1, sentiment._1)
           } //end inner if
@@ -143,28 +143,23 @@ object Application extends Controller with MongoController {
 
   def reactiveTweetTopic(topic: String, sentiment: Double): Unit = {
     Future{
-      tweetsMap(topic).total += 1
+      var incPP,incP, incNEU, incN, incNN = 0
       sentiment match {
-        case  2.0 => tweetsMap(topic).pp += 1
-        case  1.0 => tweetsMap(topic).p += 1
-        case  0.0 => tweetsMap(topic).neu += 1
-        case -1.0 => tweetsMap(topic).n += 1
-        case -2.0 => tweetsMap(topic).nn += 1
+        case  2.0 => incPP  = 1
+        case  1.0 => incP   = 1
+        case  0.0 => incNEU = 1
+        case -1.0 => incN   = 1
+        case -2.0 => incNN  = 1
       }
-      tweetsMap(topic).avg = (tweetsMap(topic).pp*2 + tweetsMap(topic).p +
-                              tweetsMap(topic).neu + tweetsMap(topic).n +
-                              tweetsMap(topic).nn*(-2)) / tweetsMap(topic).total
       val selector = BSONDocument("_id" -> tweetsMap(topic).id)
       val modifier = BSONDocument(
-          "$set" -> BSONDocument(
-            "avgSen" -> tweetsMap(topic).avg,
-            "total" -> tweetsMap(topic).total,
-            "bars" -> BSONDocument(
-              "excellent" -> tweetsMap(topic).pp,
-              "good"      -> tweetsMap(topic).p,
-              "neutral"   -> tweetsMap(topic).neu,
-              "bad"       -> tweetsMap(topic).n,
-              "terrible"  -> tweetsMap(topic).nn)))
+          "$inc" -> BSONDocument(
+            "total"-> 1,
+            "bars.excellent" -> incPP,
+            "bars.good"      -> incP,
+            "bars.neutral"   -> incNEU,
+            "bars.bad"       -> incN,
+            "bars.terrible"  -> incNN))
       topicsColl.update(selector, modifier)
     println(tweetsMap)
     }
@@ -210,7 +205,10 @@ object Application extends Controller with MongoController {
 
   def track(term: String) = Action { request =>
     tweetsMap = Map[String, TweetTopic]()
-    term.split(",").toList.foreach(upsertTweetTopic _)
+    val terms = term.split(",").toList
+    terms.foreach(upsertTweetTopic _)
+    while(terms.length != tweetsMap.size){
+    }
     trackTerms(term)
     Ok("got it")
   }
@@ -218,14 +216,26 @@ object Application extends Controller with MongoController {
   def trackTerms(term: String): Unit = {
     val tweetEnumeratee = Enumeratee
                           .map[Array[Byte]](bytes => new String(bytes, "UTF-8"))
-    println()
-    println(tweetsMap)
     Iteratee.flatten(
     WS.url("https://stream.twitter.com/1.1/statuses/filter.json?track=" + term)
     .sign(OAuthCalculator(Twitter.KEY, Twitter.TOKEN))
     .get((_: (WSResponseHeaders)) => tweetEnumeratee &> tweetIteratee))
     .run
 }
+
+/*
+  val statsEnumerator = Enumerator.fromCallback{ () =>
+    Promise.timeout(Some(true), 1000 milliseconds)
+  }
+
+  val statsIteratee = Iteratee.foreach[Boolean](b =>
+  if(b) updateStats())
+
+  def updatStats = {
+    Future{
+
+    }
+  }*/
 
   def index = Action {
     println("INDEX OK")

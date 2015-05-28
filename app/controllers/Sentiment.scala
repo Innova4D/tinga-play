@@ -4,6 +4,8 @@ import play.api._
 import play.api.mvc._
 import play.api.Play.current
 
+import scala.util.matching.Regex
+
 import tinga.sentiment._
 
 object Sentiment extends Controller{
@@ -18,11 +20,22 @@ object Sentiment extends Controller{
                             case "no-sentiment" => false
                             case _              => true
       }
-      (sentiment*intensity, valid)
+      (sentiment, valid)
     }
 
     def words(str: String): List[String] = {
-      s.wordCloud(str).toList
+      s.wordCloud(str).toList.filter(x => x!="")
+    }
+
+    def clean(str: String): String = {
+      val mentions = new Regex("@\\S+")
+      val retweet = new Regex("RT ")
+      val link = new Regex("https?\\S+")
+      mentions.replaceAllIn(
+        retweet.replaceAllIn(
+          link.replaceAllIn(str, m => "")
+                               , m => "")
+                               , m => "")
     }
 
 
