@@ -7,9 +7,12 @@ import play.api.libs.json._
 import play.api.libs.oauth._
 import play.api.Play.current
 import play.api.libs.iteratee._
+import play.api.libs.concurrent.Promise
+import play.api.libs.concurrent.Akka
 import play.api.libs.concurrent.Execution.Implicits._
 
 import org.joda.time.DateTime
+import scala.language.postfixOps
 
 import scala.util.{Success, Failure}
 import scala.concurrent.duration._
@@ -18,6 +21,7 @@ import scala.concurrent.{Future, Await}
 import play.modules.reactivemongo.{MongoController, ReactiveMongoPlugin}
 
 import reactivemongo.api.collections.default.BSONCollection
+import reactivemongo.core.commands._
 import reactivemongo.bson._
 import reactivemongo.api._
 
@@ -72,11 +76,11 @@ object Application extends Controller with MongoController {
       val topic = obj.getAs[BSONObjectID]("topic")
       val text = obj.getAs[String]("text").get
       val objId = obj.getAs[String]("_id").get
-      val sentiment = Sentiment.score(Sentiment.clean(text))
+      val (sentiment, valid) = Sentiment.score(Sentiment.clean(text))
       val selector = BSONDocument("_id" -> objId)
       val modifier = BSONDocument(
           "$set" -> BSONDocument(
-            "sentiment" -> sentiment._1,
+            "sentiment" -> sentiment,
             "keywords" -> Sentiment.words(Sentiment.clean(text))))
       commentsColl.update(selector, modifier)
       //reactiveUpdateTopic(topic, sentiment._1)
@@ -84,22 +88,10 @@ object Application extends Controller with MongoController {
   }
 
 
-  case class TweetTopic(var id: BSONObjectID, var avg: Double,
-                        var total: Double, var pp: Double, var p: Double,
-                        var neu: Double, var n: Double, var nn: Double)
 
-  //var topicsId = Map[String,BSONObjectID]()
-  //topicsId += topic -> id
-  var tweetsMap = Map[String, TweetTopic]()
-  var topicsMap = Map[String,TweetTopic]()
-  def setTweetTopic(topic: String, id: BSONObjectID, avg: Double,
-                    total: Double, bars: BSONDocument): Unit = {
-    val pp  = 1.0//bars.getAs[Double]("excellent").get
-    val p   = bars.getAs[Double]("good").get
-    val neu = bars.getAs[Double]("neutral").get
-    val n   = bars.getAs[Double]("bad").get
-    val nn  = bars.getAs[Double]("terrible").get
-    tweetsMap += topic -> TweetTopic(id, avg, total, pp, p, neu, n, nn)
+  var tweetsMap = Map[String,BSONObjectID]()
+  def setTweetTopic(topic: String, id: BSONObjectID): Unit = {
+    tweetsMap += topic -> id
   }
 
   def insertTweets(str: String): Unit = {
@@ -120,21 +112,21 @@ object Application extends Controller with MongoController {
   def insertTweet(json: JsValue): Unit = {
     val text = (json \ "text").as[String]
     val userName = (json \ "user" \ "screen_name").as[String]
-    val sentiment = Sentiment.score(Sentiment.clean(text))
+    val (sentiment, valid) = Sentiment.score(Sentiment.clean(text))
     Future{
-      if(sentiment._2 == true){
+      if(valid == true){
         for(tweetTopic <- tweetsMap){
           if(text contains tweetTopic._1){
             commentsColl.insert(BSONDocument(
               "_id" -> BSONObjectID.generate.stringify,
-              "topic" -> tweetTopic._2.id,
+              "topic" -> tweetTopic._2,
               "text" -> text,
               "author" -> userName,
               "posted" -> BSONDateTime(new DateTime().getMillis),
-              "sentiment" -> sentiment._1,
+              "sentiment" -> sentiment,
               "keywords" -> Sentiment.words(Sentiment.clean(text)),
               "source" -> "twitter"))
-            reactiveTweetTopic(tweetTopic._1, sentiment._1)
+            reactiveTweetTopic(tweetTopic._1, sentiment)
           } //end inner if
         } // end for
       } // end outer if
@@ -151,7 +143,7 @@ object Application extends Controller with MongoController {
         case -1.0 => incN   = 1
         case -2.0 => incNN  = 1
       }
-      val selector = BSONDocument("_id" -> tweetsMap(topic).id)
+      val selector = BSONDocument("_id" -> tweetsMap(topic))
       val modifier = BSONDocument(
           "$inc" -> BSONDocument(
             "total"-> 1,
@@ -173,30 +165,27 @@ object Application extends Controller with MongoController {
       case d => d match{
               case None => {
                             val id = BSONObjectID.generate
-                            val bars = BSONDocument(
-                              "excellent" -> 0.0,
-                              "good"      -> 0.0,
-                              "neutral"   -> 0.0,
-                              "bad"       -> 0.0,
-                              "terrible"  -> 0.0)
+                            //val bars =
                             topicsColl.insert(BSONDocument(
                               "_id"       -> id,
                               "name"      -> BSONString("#" + topic),
                               "isActive"  -> 1,
-                              "creator"   -> "ReactiveTwitter",
+                              "creator"   -> "Twitter",
                               "timestamp" -> BSONDateTime(new DateTime()
                                                           .getMillis),
                               "avgSen" -> 0.0,
                               "total"  -> 0.0,
-                              "bars"   -> bars))
-                            setTweetTopic(topic, id, 0.0, 0.0, bars)
+                              "bars"   -> BSONDocument(
+                                "excellent" -> 0.0,
+                                "good"      -> 0.0,
+                                "neutral"   -> 0.0,
+                                "bad"       -> 0.0,
+                                "terrible"  -> 0.0)))
+                            setTweetTopic(topic, id)
                            }
               case Some(bs) =>{
                                val id = bs.getAs[BSONObjectID]("_id").get
-                               val avg = bs.getAs[Double]("avgSen").get
-                               val total = bs.getAs[Double]("total").get
-                               val bars = bs.getAs[BSONDocument]("bars").get
-                               setTweetTopic(topic, id, avg, total, bars)
+                               setTweetTopic(topic, id)
                               }
                            }
               }
@@ -204,13 +193,14 @@ object Application extends Controller with MongoController {
 
 
   def track(term: String) = Action { request =>
-    tweetsMap = Map[String, TweetTopic]()
+    index
     val terms = term.split(",").toList
+    tweetsMap = Map[String, BSONObjectID]()
     terms.foreach(upsertTweetTopic _)
-    while(terms.length != tweetsMap.size){
-    }
+    Thread.sleep(100)
+    println(tweetsMap)
     trackTerms(term)
-    Ok("got it")
+    Ok("got it tracking: ***" + terms.mkString("-") + "***\n")
   }
 
   def trackTerms(term: String): Unit = {
@@ -223,22 +213,65 @@ object Application extends Controller with MongoController {
     .run
 }
 
-/*
-  val statsEnumerator = Enumerator.fromCallback{ () =>
-    Promise.timeout(Some(true), 1000 milliseconds)
+
+  val avgEnumerator = Enumerator.generateM{
+    Promise.timeout(Some("Average per Topic"), 1000 milliseconds)
   }
 
-  val statsIteratee = Iteratee.foreach[Boolean](b =>
-  if(b) updateStats())
+  val avgIteratee = Iteratee.foreach[String](str =>{
+         updateAvg(str)})
 
-  def updatStats = {
-    Future{
+  avgEnumerator |>> avgIteratee
 
+  def updateAvg(str: String): Unit = {
+    for(topic <- tweetsMap){
+      val commandDoc = BSONDocument(
+        "aggregate" -> "comments",
+        "pipeline"  -> BSONArray(
+          BSONDocument("$match" -> BSONDocument("topic" -> topic._2)),
+          BSONDocument("$group" -> BSONDocument(
+            "_id" -> "averageGlobal",
+            "avgSen" -> BSONDocument("$avg" -> "$sentiment")))))
+      val result = defaultDB.command(RawCommand(commandDoc))
+      /* result
+      {
+        result: [
+          0: {
+              _id: BSONString(averageGlobal),
+              avgSen: BSONDouble(0.46792035398230086)
+            }
+        ],
+        ok: BSONDouble(1.0)
+      }
+      */
+      result.onFailure{
+        case e => Console.println(e)
+      }
+      result.onSuccess{
+        case bs => {
+          val resultList = bs.getAs[List[BSONDocument]]("result").get
+          val avgSen = resultList(0).getAs[Double]("avgSen").get
+          val selector = BSONDocument("_id" -> topic._2)
+          val modifier = BSONDocument(
+            "$set" -> BSONDocument(
+              "avgSen" -> avgSen
+            ))
+          topicsColl.update(selector, modifier)
+        }
+      }
     }
-  }*/
+  }
+
+  /*val statsEnumerator = Enumerator.generateM{
+    Promise.timeout(Some("Avgerage Stats"), 1000 milliseconds)
+  }
+
+  val statsIteratee = Iteratee.foreach[String](str =>{
+         updateStats(str)})
+
+  statsEnumerator |>> statsIteratee*/
 
   def index = Action {
-    println("INDEX OK")
     Ok("Your new application is ready.")
   }
 
