@@ -219,21 +219,22 @@ object Application extends Controller with MongoController {
   }
 
   val avgIteratee = Iteratee.foreach[String](str =>{
-         updateAvg(str)})
+         updateReactiveStats(str)})
 
   avgEnumerator |>> avgIteratee
 
-  def updateAvg(str: String): Unit = {
+  def updateReactiveStats(str: String): Unit = {
     for(topic <- tweetsMap){
-      val commandDoc = BSONDocument(
+      /************************** AVERAGE START *************************/
+      val commandAvg = BSONDocument(
         "aggregate" -> "comments",
         "pipeline"  -> BSONArray(
           BSONDocument("$match" -> BSONDocument("topic" -> topic._2)),
           BSONDocument("$group" -> BSONDocument(
             "_id" -> "averageGlobal",
             "avgSen" -> BSONDocument("$avg" -> "$sentiment")))))
-      val result = defaultDB.command(RawCommand(commandDoc))
-      /* result
+      val resultAvg = defaultDB.command(RawCommand(commandAvg))
+      /* resultAvg
       {
         result: [
           0: {
@@ -244,21 +245,85 @@ object Application extends Controller with MongoController {
         ok: BSONDouble(1.0)
       }
       */
-      result.onFailure{
+      resultAvg.onFailure{
         case e => Console.println(e)
       }
-      result.onSuccess{
+      resultAvg.onSuccess{
         case bs => {
-          val resultList = bs.getAs[List[BSONDocument]]("result").get
-          val avgSen = resultList(0).getAs[Double]("avgSen").get
+          //println(BSONDocument.pretty(bs))
+          val resultList = bs.getAs[List[BSONDocument]]("result").toList.flatten
+          if(!resultList.isEmpty){
+            val avgSen = resultList(0).getAs[Double]("avgSen").get
+            val selector = BSONDocument("_id" -> topic._2)
+            val modifier = BSONDocument(
+              "$set" -> BSONDocument(
+                "avgSen" -> avgSen))
+            topicsColl.update(selector, modifier)
+          }
+        }
+      }
+      /************************** AVERAGE END *************************/
+      /****************************************************************/
+      /************************ KEYWORDS START ************************/
+      val commandWords = BSONDocument(
+        "aggregate" -> "comments",
+        "pipeline" -> BSONArray(
+          BSONDocument("$match" -> BSONDocument("topic" -> topic._2)),
+          BSONDocument("$unwind" -> "$keywords"),
+          BSONDocument("$group" -> BSONDocument(
+            "_id" -> "$keywords",
+            "freq" -> BSONDocument("$sum" -> 1))),
+          BSONDocument("$sort" -> BSONDocument("freq" -> 1)),
+          BSONDocument("$limit" -> 5)))
+      val resultWords = defaultDB.command(RawCommand(commandWords))
+      /* resultWords
+      {
+          result: [
+            0: {
+              _id: BSONString(One Direction),
+              freq: BSONInteger(1)
+            },
+            1: {
+              _id: BSONString(hambre),
+              freq: BSONInteger(1)
+            },
+            2: {
+              _id: BSONString(hora),
+              freq: BSONInteger(1)
+            },
+            3: {
+              _id: BSONString(Plantas Medicinales),
+              freq: BSONInteger(1)
+            },
+            4: {
+              _id: BSONString(muñecos chinos),
+              freq: BSONInteger(1)
+            }
+          ],
+          ok: BSONDouble(1.0)
+        } */
+
+      resultWords.onFailure{
+        case e => Console.println(e)
+      }
+      resultWords.onSuccess{
+        case bs => {
+          val resultList = bs.getAs[List[BSONDocument]]("result").toList.flatten
+          val wordsFreq = resultList
+                          .map(b => {
+                            val word = b.getAs[String]("_id").get
+                            val freq = b.getAs[Int]("freq").get
+                            BSONDocument(word -> freq)
+                            })
+                          .foldLeft(BSONDocument())((acc, item) => acc.add(item))
           val selector = BSONDocument("_id" -> topic._2)
           val modifier = BSONDocument(
             "$set" -> BSONDocument(
-              "avgSen" -> avgSen
-            ))
+              "keywords" -> wordsFreq ))
           topicsColl.update(selector, modifier)
         }
       }
+      /************************ KEYWORDS END ************************/
     }
   }
 
