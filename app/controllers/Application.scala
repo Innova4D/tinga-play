@@ -153,7 +153,6 @@ object Application extends Controller with MongoController {
             "bars.bad"       -> incN,
             "bars.terrible"  -> incNN))
       topicsColl.update(selector, modifier)
-    println(tweetsMap)
     }
   }
 
@@ -198,7 +197,6 @@ object Application extends Controller with MongoController {
     tweetsMap = Map[String, BSONObjectID]()
     terms.foreach(upsertTweetTopic _)
     Thread.sleep(100)
-    println(tweetsMap)
     trackTerms(term)
     Ok("got it tracking: ***" + terms.mkString("-") + "***\n")
   }
@@ -219,11 +217,12 @@ object Application extends Controller with MongoController {
   }
 
   val avgIteratee = Iteratee.foreach[String](str =>{
-         updateReactiveStats(str)})
+         updateAvgStats(str)})
 
   avgEnumerator |>> avgIteratee
 
-  def updateReactiveStats(str: String): Unit = {
+  def updateAvgStats(str: String): Unit = {
+    println("calculating Average")
     for(topic <- tweetsMap){
       /************************** AVERAGE START *************************/
       val commandAvg = BSONDocument(
@@ -250,7 +249,6 @@ object Application extends Controller with MongoController {
       }
       resultAvg.onSuccess{
         case bs => {
-          //println(BSONDocument.pretty(bs))
           val resultList = bs.getAs[List[BSONDocument]]("result").toList.flatten
           if(!resultList.isEmpty){
             val avgSen = resultList(0).getAs[Double]("avgSen").get
@@ -263,7 +261,21 @@ object Application extends Controller with MongoController {
         }
       }
       /************************** AVERAGE END *************************/
-      /****************************************************************/
+    }
+  }
+
+  val wordCloudEnumerator = Enumerator.generateM{
+    Promise.timeout(Some("WordCloud per Topic"), 15000 milliseconds)
+  }
+
+  val wordCloudIteratee = Iteratee.foreach[String](str =>{
+         updateWordCloudStats(str)})
+
+  wordCloudEnumerator |>> wordCloudIteratee
+
+  def updateWordCloudStats(str: String): Unit = {
+    println("calculating WordCloud")
+    for(topic <- tweetsMap){
       /************************ KEYWORDS START ************************/
       val commandWords = BSONDocument(
         "aggregate" -> "comments",
@@ -326,6 +338,7 @@ object Application extends Controller with MongoController {
       /************************ KEYWORDS END ************************/
     }
   }
+
 
   /*val statsEnumerator = Enumerator.generateM{
     Promise.timeout(Some("Avgerage Stats"), 1000 milliseconds)
