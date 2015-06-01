@@ -105,7 +105,6 @@ object Application extends Controller with MongoController {
         }
       val json = Json.parse(str)
       insertTweet(json)
-      println((json \ "text").as[String])
     }
   }
 
@@ -115,6 +114,7 @@ object Application extends Controller with MongoController {
     val (sentiment, valid) = Sentiment.score(Sentiment.clean(text))
     Future{
       if(valid == true){
+        println(text)
         for(tweetTopic <- tweetsMap){
           if(text contains tweetTopic._1){
             commentsColl.insert(BSONDocument(
