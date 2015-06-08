@@ -285,7 +285,7 @@ object Application extends Controller with MongoController {
           BSONDocument("$group" -> BSONDocument(
             "_id" -> "$keywords",
             "freq" -> BSONDocument("$sum" -> 1))),
-          BSONDocument("$sort" -> BSONDocument("freq" -> 1)),
+          BSONDocument("$sort" -> BSONDocument("freq" -> -1)),
           BSONDocument("$limit" -> 5)))
       val resultWords = defaultDB.command(RawCommand(commandWords))
       /* resultWords
