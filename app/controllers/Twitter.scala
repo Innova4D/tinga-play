@@ -17,7 +17,7 @@ object Twitter extends Controller{
     val token  = (request.body \ "token").as[String]
     val secret = (request.body \ "secret").as[String]
     TOKEN = RequestToken(token, secret)
-    Ok("Proper credentials")
+    Ok("Proper credentials +  \n")
   }
 
 }

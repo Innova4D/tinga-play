@@ -73,7 +73,7 @@ object Application extends Controller with MongoController {
 
   def updateComment(obj: BSONDocument): Unit = {
     Future{
-      val topic = obj.getAs[BSONObjectID]("topic")
+      val topic = obj.getAs[BSONObjectID]("topic").get
       val text = obj.getAs[String]("text").get
       val objId = obj.getAs[String]("_id").get
       val (sentiment, valid) = Sentiment.score(Sentiment.clean(text))
@@ -83,7 +83,7 @@ object Application extends Controller with MongoController {
             "sentiment" -> sentiment,
             "keywords" -> Sentiment.words(Sentiment.clean(text))))
       commentsColl.update(selector, modifier)
-      //reactiveUpdateTopic(topic, sentiment._1)
+      reactiveTopic(topic, sentiment, "app")
     }
   }
 
@@ -126,14 +126,14 @@ object Application extends Controller with MongoController {
               "sentiment" -> sentiment,
               "keywords" -> Sentiment.words(Sentiment.clean(text)),
               "source" -> "twitter"))
-            reactiveTweetTopic(tweetTopic._1, sentiment)
+            reactiveTopic(tweetTopic._2, sentiment, "twitter")
           } //end inner if
         } // end for
       } // end outer if
     } // end Future
   }
 
-  def reactiveTweetTopic(topic: String, sentiment: Double): Unit = {
+  def reactiveTopic(id: BSONObjectID, sentiment: Double, source: String): Unit = {
     Future{
       var incPP,incP, incNEU, incN, incNN = 0
       sentiment match {
@@ -143,7 +143,7 @@ object Application extends Controller with MongoController {
         case -1.0 => incN   = 1
         case -2.0 => incNN  = 1
       }
-      val selector = BSONDocument("_id" -> tweetsMap(topic))
+      val selector = BSONDocument("_id" -> id)
       val modifier = BSONDocument(
           "$inc" -> BSONDocument(
             "total"-> 1,
@@ -191,9 +191,10 @@ object Application extends Controller with MongoController {
   }
 
 
+  var terms = List[String]()
   def track(term: String) = Action { request =>
     index
-    val terms = term.split(",").toList
+    terms = term.split(",").toList
     tweetsMap = Map[String, BSONObjectID]()
     terms.foreach(upsertTweetTopic _)
     Thread.sleep(100)
@@ -339,6 +340,17 @@ object Application extends Controller with MongoController {
     }
   }
 
+   val twoMinutesEnumerator = Enumerator.generateM{
+     Promise.timeout(Some("twoMinutesEnumerator"), 120 seconds)
+   }
+
+   val twoMinutesIteratee = Iteratee.foreach[String](str =>{
+        val term = terms.mkString(",")
+        println("resending to Twitter " + term)
+        trackTerms(term)
+   })
+
+   twoMinutesEnumerator |>> twoMinutesIteratee
 
   /*val statsEnumerator = Enumerator.generateM{
     Promise.timeout(Some("Avgerage Stats"), 1000 milliseconds)
