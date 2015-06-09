@@ -28,6 +28,7 @@ object Sentiment extends Controller{
       val newStr = hashtag.replaceAllIn(str, m => "")
       s.wordCloud(newStr).toList.filter(x => x!="")
                          .map(y => y.replace("\n"," ").trim)
+                         .filter(z => z!="")
     }
 
     def clean(str: String): String = {
