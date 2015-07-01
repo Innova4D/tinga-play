@@ -24,10 +24,10 @@ object Sentiment extends Controller{
     }
 
     def words(str: String): List[String] = {
-      val hashtag = new Regex("#\\S+")
-      val newStr = hashtag.replaceAllIn(str, m => "")
-      s.wordCloud(newStr).toList.filter(x => x!="")
-                         .map(y => y.replace("\n"," ").trim)
+      //val hashtag = new Regex("#\\S+")
+      //val newStr = hashtag.replaceAllIn(str, m => "")
+      s.wordCloud(str).toList.filter(x => x!="")
+                         .map(y => y.replace("\n","").trim)
                          .filter(z => z!="")
     }
 
