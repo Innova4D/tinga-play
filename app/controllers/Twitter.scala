@@ -5,6 +5,8 @@ import play.api.mvc._
 import play.api.libs.ws._
 import play.api.libs.oauth._
 import play.api.Play.current
+import play.api.libs.iteratee._
+
 
 object Twitter extends Controller{
 
@@ -17,7 +19,13 @@ object Twitter extends Controller{
     val token  = (request.body \ "token").as[String]
     val secret = (request.body \ "secret").as[String]
     TOKEN = RequestToken(token, secret)
-    Ok("Proper credentials +  \n")
+    if(token.length == 50 && secret.length == 45)
+      Ok("Proper credentials" +  "\n")
+    else
+      Result(
+          header = ResponseHeader(400, Map(CONTENT_TYPE -> "text/plain")),
+          body = Enumerator("No credentials found \n".getBytes())
+          )
   }
 
 }
