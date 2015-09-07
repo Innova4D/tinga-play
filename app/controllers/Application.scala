@@ -25,6 +25,9 @@ import reactivemongo.core.commands._
 import reactivemongo.bson._
 import reactivemongo.api._
 
+import tinga.nlp.texttools.TextPreprocessor
+import tinga.nlp.texttools.TextPreprocessor.lexiconDir
+
 
 
 object Application extends Controller with MongoController {
@@ -352,14 +355,32 @@ object Application extends Controller with MongoController {
 
    twoMinutesEnumerator |>> twoMinutesIteratee
 
-  /*val statsEnumerator = Enumerator.generateM{
-    Promise.timeout(Some("Avgerage Stats"), 1000 milliseconds)
-  }
+   System.out.println("Cores: " + Runtime.getRuntime().availableProcessors());
+   //System.out.println("Threads: " + Invoker.executor.getCorePoolSize());
 
-  val statsIteratee = Iteratee.foreach[String](str =>{
-         updateStats(str)})
+   val lines = scala.io.Source.fromFile("comments_text.txt").getLines().toList
+   var iter = -1;
+   var t0 = System.nanoTime
+   val testEnumerator = Enumerator.generateM{
+    Promise.timeout({
+                    //t0 = System.nanoTime()
+                    if(iter <= 15355)
+                    iter = iter + 1;
+                    Some(lines(iter));}, 0.01 milliseconds)
+   }
 
-  statsEnumerator |>> statsIteratee*/
+   val testIteratee = Iteratee.foreach[String](str =>{
+        //println(
+           Sentiment.score(Sentiment.clean(str))
+         //)
+         if(iter == 15355){
+           var t1 = System.nanoTime()
+           println("TIME!!!   " + (t1-t0))
+           println(Sentiment.score(Sentiment.clean(str)))
+           println(iter + " R E A D Y")}
+        })
+
+  testEnumerator |>> testIteratee
 
   def index = Action {
     Ok("Your new application is ready.")
